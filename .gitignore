@@ -1,0 +1,8 @@
+data/*
+outputs/*
+writeup/*
+vefmap-site-list.csv
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
