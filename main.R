@@ -367,233 +367,76 @@ metrics_future <- metrics_future |>
     by = "waterbody"
   )
 
-
-
-# extract carrying capacity for species and reach
-metrics_tmp <- metrics_observed |> filter(waterbody == "goulburn_river_r4")
-k_mc <- flow_futures |> 
-  filter(species == "maccullochella_peelii", waterbody == "goulburn_river_r4") |>
-  pull(carrying_capacity) |>
-  unique()
-k_rb <- flow_futures |> 
-  filter(species == "melanotaenia_fluviatilis", waterbody == "goulburn_river_r4") |>
-  pull(carrying_capacity) |>
-  unique()
-k_cc <- flow_futures |> 
-  filter(species == "cyprinus_carpio", waterbody == "goulburn_river_r4") |>
-  pull(carrying_capacity) |>
-  unique()
-
-# specify initial conditions
-initial <- specify_initial_conditions(
-  species = "maccullochella_peelii",
-  waterbody = "goulburn_river_r4",
-  cpue = cpue,
-  start = min(metrics_tmp$water_year),
-  nsim = nsim,
-  k = k_mc
+# loop over all waterbodies and fit a model for each
+wb_list <- metrics_observed |> pull(waterbody) |> unique()
+northern_rivers <- c(
+  "broken_creek_r4", "broken_river_r3", "campaspe_river_r4", 
+  "goulburn_river_r4", "loddon_river_r4", "ovens_river_r5"
 )
-
-# grab stocking info if required (default to zero, otherwise)
-n_stocked <- rep(0, nrow(metrics_tmp))
-system_lu <- c(
-  "broken_creek_r4" = "Broken Creek",
-  "broken_river_r3" = "Broken River",
-  "campaspe_river_r4" = "Campaspe River",
-  "goulburn_river_r4" = "Goulburn River",
-  "loddon_river_r4" = "Loddon River",
-  "ovens_river_r5" = "Ovens River"
-)
-stocking_rates <- stocking |>
-  filter(
-    Species == "Murray Cod",
-    System == system_lu["goulburn_river_r4"]
-  ) |>
-  select(Year, Number) |>
-  mutate(Year = Year + 1) |>
-  rename(water_year = Year, number_stocked = Number)
-n_stocked <- metrics_tmp |>
-  filter(species == "maccullochella_peelii") |>
-  select(water_year) |>
-  left_join(stocking_rates, by = c("water_year")) |>
-  mutate(number_stocked = ifelse(is.na(number_stocked), 0, number_stocked)) |>
-  pull(number_stocked)
-
-# initialise population model for this species and waterbody
-mc <- specify_pop_model(
-  species = "maccullochella_peelii",
-  waterbody = "goulburn_river_r4",
-  ntime = nrow(metrics_tmp), 
-  nstocked = n_stocked,
-  k = k_mc
-)
-rb <- specify_pop_model(
-  species = "melanotaenia_fluviatilis",
-  waterbody = "goulburn_river_r4",
-  ntime = nrow(metrics_tmp), 
-  k = k_rb
-)
-cc <- specify_pop_model(
-  species = "cyprinus_carpio",
-  waterbody = "goulburn_river_r4",
-  ntime = nrow(metrics_tmp), 
-  k = k_cc
-)
-
-# carp negatively affect smaller MC
-mask_lt4 <- transition(mc$dynamics$matrix, dim = 1:4)
-fun_lt4 <- function(x, n) {
-  # n is the population vector of carp
-  x * exp(-sum(n[3:28]) / 100000)
-}
-
-# carp benefit from smaller MC
-mask_all <- transition(cc$dynamics$matrix)
-fun_all <- function(x, n) {
-  # n is the population vector of MC
-  x / (1 + x * sum(n[1:4]) / 100000)
-}
-
-# carp reduce MC recruitment
-mask_rec <- reproduction(mc$dynamics$matrix)
-fun_rec <- function(x, n) {
-  # n is the population vector of carp
-  x * exp(-sum(n[3:28]) / 100000)
-}
-
-# carp reduce RB abundance
-mask_rb_cc <- transition(rb$dynamics$matrix)
-fun_rb_cc <- function(x, n) {
-  # n is the population vector of carp
-  x * exp(-sum(n[3:28]) / 100000)
-}
-
-# MC reduce RB abundance
-mask_rb_mc <- transition(rb$dynamics$matrix)
-fun_rb_mc <- function(x, n) {
-  # n is the population vector of cod
-  x * exp(-sum(n[3:50]) / 20000)
-}
-
-# big MC reduce survival of small carp
-mask_lt5 <- transition(cc$dynamics$matrix, dim = 1:5)
-fun_lt5 <- function(x, n) {
-  # n is the population vector of MC
-  x * exp(-sum(n[3:50]) / 20000)
-}
-
-# combine masks and functions into pairwise_interaction objects
-mc_lt4 <- pairwise_interaction(mc$dynamics, cc$dynamics, mask_lt4, fun_lt4)
-cc_all <- pairwise_interaction(cc$dynamics, mc$dynamics, mask_all, fun_all)
-mc_rec <- pairwise_interaction(mc$dynamics, cc$dynamics, mask_rec, fun_rec)
-rb_cc <- pairwise_interaction(rb$dynamics, cc$dynamics, mask_rb_cc, fun_rb_cc)
-rb_mc <- pairwise_interaction(rb$dynamics, mc$dynamics, mask_rb_mc, fun_rb_mc)
-cc_lt5 <- pairwise_interaction(cc$dynamics, mc$dynamics, mask_lt5, fun_lt5)
-
-# compile a multispecies dynamics object
-mc_cc_rb_dyn <- multispecies(mc_lt4, cc_all, mc_rec, rb_cc, rb_mc, cc_lt5)
-
-# add covariates
-metrics_tmp <- metrics_tmp |>
-  mutate(
-    flow_variability = spawning_flow_variability,
-    floodplain_access = ifelse(proportional_spring_flow > 5, 1, 0)
+for (i in seq_along(wb_list)) {
+  
+  # pull out metrics for the target waterbody
+  metrics_wb <- metrics_observed |> filter(waterbody == !!wb_list[i])
+  metrics_wb_cf<- metrics_counterfactual |> filter(waterbody == !!wb_list[i])
+  
+  # create base population dynamics objects
+  pops <- prepare_pop(
+    metrics_wb, 
+    waterbody = wb_list[i],
+    stocking = stocking
   )
-
-# rename a few metrics for some species
-metrics_tmp <- metrics_tmp |>
-  mutate(antecedent_flow = proportional_antecedent_flow)
-metrics_tmp <- metrics_tmp |>
-  mutate(blackwater_risk = hypoxia_risk)
-metrics_tmp <- metrics_tmp |>
-  mutate(redfin = presence_redfin, gambusia = presence_gambusia)
-
-# TODO: wrap arg formatting in a function
-# TODO: add stocking step to the MC model correctly
-# TODO: work out how to set initial conditions appropriately
-#  (is a list of inits, one for each species -- check order)
-# TODO: setup args so they match hex codes of pop dynamics object
-# TODO: split metrics_tmp into each species term
-# TODO: set up a loop over all waterbodies
-# TODO: set up blackfish variant
-
-metrics_tmp_mc <- metrics_tmp |>
-  filter(species == "maccullochella_peelii") 
-mc_args <- list(
-  density_dependence_n = mc$arguments$density_dependence_n,
-  covariates = c(
-    format_covariates(
-      metrics_tmp |>
-        filter(species == "maccullochella_peelii") |>
-        select(all_of(get_metric_names("maccullochella_peelii")))
-    ),
-    list(threshold = 0.05),
-    list(coefs = get_coefs("maccullochella_peelii", "goulburn_river_r4"))
-  ),
-  density_dependence = list(
-    kdyn = lapply(
-      seq_len(nrow(metrics_tmp_mc)),
-      \(.x) metrics_tmp_mc$carrying_capacity[.x]
-    )
+  
+  # pull out system-appropriate populations/species 
+  if (wb_list[i] %in% northern_rivers) {
+    pop_list <- list(pops$mc, pops$cc, pops$rb)
+  } else {
+    pop_list <- list(pops$bf, pops$cc)
+  }
+  
+  # compile a multispecies dynamics object
+  interactions <- specify_interactions(pop_list)
+  mspop <- do.call(multispecies, interactions)
+  
+  # check the order of species in the ms object
+  species_order <- match_pops(mspop, pop_list)
+  
+  # prepare args and inits
+  args_burnin <- prepare_args(
+    metrics = metrics_wb,
+    waterbody = wb_list[i],
+    pops = pop_list,
+    nburnin = 10
   )
-)
-cc_args <- list(
-  density_dependence_n = cc$arguments$density_dependence_n,
-  covariates = c(
-    format_covariates(
-      metrics_tmp |>
-        filter(species == "cyprinus_carpio") |>
-        select(all_of(get_metric_names("cyprinus_carpio")))
-    ),
-    list(coefs = get_coefs("cyprinus_carpio", "goulburn_river_r4"))
+  args_observed <- prepare_args(
+    metrics = metrics_wb,
+    waterbody = wb_list[i],
+    pops = pop_list
   )
-)
-rb_args <- list(
-  covariates = c(
-    format_covariates(
-      metrics_tmp |>
-        filter(species == "melanotaenia_fluviatilis") |>
-        select(all_of(get_metric_names("melanotaenia_fluviatilis")))
-    ),
-    list(coefs = get_coefs("melanotaenia_fluviatilis", "goulburn_river_r4")[1:3]),
-    list(warmwater_coefficient = get_coefs("melanotaenia_fluviatilis", "goulburn_river_r4")[4]),
-    list(coldwinter_coefficient = get_coefs("melanotaenia_fluviatilis", "goulburn_river_r4")[5])
+  args_counterfactual <- prepare_args(
+    metrics = metrics_wb_cf,
+    waterbody = wb_list[i],
+    pops = pop_list
   )
-)
-
-# simulate population dynamics
-sims <- simulate(
-  mc_cc_rb_dyn,
-  nsim = nsim,
-  args = list(
-    mc_args,
-    cc_args,
-    rb_args
-  ),
-  options = list(
-    ntime = nrow(metrics_tmp),
-    update = update_binomial_leslie,
-    tidy_abundances = floor
+  inits <- prepare_inits(
+    waterbody = wb_list[i],
+    cpue = cpue,
+    metrics = metrics_wb,
+    pops = pop_list,
+    nsim = nsim
   )
-)
+  
+  # simulate population dynamics for target system
+  sims <- simulate_scenario(
+    x = mspop,
+    nsim = nsim,
+    init = inits, 
+    args = args_observed,
+    args2 = args_counterfactual,
+    args_burnin = args_burnin
+  )
+  
+  # save outputs
+  qsave(sims, file = "outputs/simulations/sims-", wb_list[i], ".qs")
+  
+}
 
-
-# TODO: use below approach to initalise/burn-in the model inits
-# initial <- simulate_scenario(
-#   species = species_list[i],
-#   x = pop, 
-#   nsim = nsim, 
-#   init = initial,
-#   metrics = metrics_observed_wb[1, ],
-#   coefs = get_coefs(species_list[i], waterbodies[j]),
-#   nburnin = nburnin - 1
-# )
-# sims_observed <- simulate_scenario(
-#   species = species_list[i],
-#   x = pop, 
-#   nsim = nsim, 
-#   init = initial[, , dim(initial)[3]],
-#   metrics = metrics_observed_wb,
-#   coefs = get_coefs(species_list[i], waterbodies[j]),
-#   nburnin = 0
-# )
