@@ -39,7 +39,7 @@ source("R/validation.R")
 
 # settings
 set.seed(2024-05-01)
-nsim <- 1000
+nsim <- 50
 nburnin <- 10
 simulate_again <- TRUE
 
@@ -405,7 +405,7 @@ for (i in seq_along(wb_list)) {
     metrics = metrics_wb,
     waterbody = wb_list[i],
     pops = pop_list,
-    nburnin = 10
+    nburnin = nburnin
   )
   args_observed <- prepare_args(
     metrics = metrics_wb,
@@ -440,3 +440,4 @@ for (i in seq_along(wb_list)) {
   
 }
 
+# TODO: consider future scenarios and how to implement

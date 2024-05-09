@@ -880,7 +880,7 @@ simulate_scenario <- function(
   # repeat but without interactions
   args_noint <- args
   for (i in seq_along(args))
-    args_noint[[i]]$interactions <- list(interacting = FALSE)
+    args_noint[[i]]$interaction <- list(interacting = FALSE)
   sims_noint <- simulate(
     x,
     nsim = nsim,
