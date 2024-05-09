@@ -25,6 +25,13 @@ rescale_fn <- function(x, base, top = 1, ...) {
   
 }
 
+# helper function to replace NA values in a vector
+fill_na <- function(x, fn = median) {
+  if (anyNA(x))
+    x[is.na(x)] <- fn(x, na.rm = TRUE)
+  x
+}
+
 # function to set initial conditions based on assumed constant proportional
 #   survival over all age classes, but modified based on survey data
 #   to account for shifts to older/younger age classes
@@ -420,160 +427,6 @@ specify_pop_model <- function(species, waterbody, ntime, nstocked, k, ...) {
   
   # return
   mod
-  
-}
-
-# function to specify species interactions
-specify_interactions <- function(pops, ...) {
-  
-  # check which type of river is being modelling
-  sp_list <- sapply(pops, \(x) x$species)
-  system <- "unspecified"
-  if (all(c("Murray cod", "Common carp", "Murray rainbowfish") %in% sp_list))
-    system <- "northern"
-  if (all(c("Common carp", "River blackfish") %in% sp_list))
-    system <- "coastal"
-  if (system == "unspecified")
-    stop("species lists must include complete species sets", call. = FALSE)
-  
-  # set up MC/CC/RB interactions for the northern system
-  if (system == "northern") {
-    
-    # pull out target pop dynamics objects
-    mc <- pops[[which(sp_list == "Murray cod")]]
-    cc <- pops[[which(sp_list == "Common carp")]]
-    rb <- pops[[which(sp_list == "Murray rainbowfish")]]
-    
-    # carp negatively affect smaller MC
-    mask_lt4 <- transition(mc$dynamics$matrix, dim = 1:4)
-    fun_lt4 <- function(x, n, interacting = TRUE) {
-      # n is the population vector of carp
-      out <- x
-      if (interacting)
-        out <- x * exp(-sum(n[3:28]) / 100000)
-      out
-    }
-    
-    # carp benefit from smaller MC
-    mask_all <- transition(cc$dynamics$matrix)
-    fun_all <- function(x, n, interacting = TRUE) {
-      # n is the population vector of MC
-      out <- x
-      if (interacting)
-        out <- x / (1 + x * sum(n[1:4]) / 100000)
-      out
-    }
-    
-    # carp reduce MC recruitment
-    mask_rec <- reproduction(mc$dynamics$matrix)
-    fun_rec <- function(x, n, interacting = TRUE) {
-      # n is the population vector of carp
-      out <- x
-      if (interacting)
-        out <- x * exp(-sum(n[3:28]) / 100000)
-      out
-    }
-    
-    # carp reduce RB abundance
-    mask_rb_cc <- transition(rb$dynamics$matrix)
-    fun_rb_cc <- function(x, n, interacting = TRUE) {
-      # n is the population vector of carp
-      out <- x
-      if (interacting)
-        out <- x * exp(-sum(n[3:28]) / 100000)
-      out
-    }
-    
-    # MC reduce RB abundance
-    mask_rb_mc <- transition(rb$dynamics$matrix)
-    fun_rb_mc <- function(x, n, interacting = TRUE) {
-      # n is the population vector of cod
-      out <- x
-      if (interacting)
-        out <- x * exp(-sum(n[3:50]) / 20000)
-      out
-    }
-    
-    # big MC reduce survival of small carp
-    mask_lt5 <- transition(cc$dynamics$matrix, dim = 1:5)
-    fun_lt5 <- function(x, n, interacting = TRUE) {
-      # n is the population vector of MC
-      out <- x
-      if (interacting)
-        out <- x * exp(-sum(n[3:50]) / 20000)
-      out
-    }
-    
-    # combine masks and functions into pairwise_interaction objects
-    mc_lt4 <- pairwise_interaction(mc$dynamics, cc$dynamics, mask_lt4, fun_lt4)
-    cc_all <- pairwise_interaction(cc$dynamics, mc$dynamics, mask_all, fun_all)
-    mc_rec <- pairwise_interaction(mc$dynamics, cc$dynamics, mask_rec, fun_rec)
-    rb_cc <- pairwise_interaction(rb$dynamics, cc$dynamics, mask_rb_cc, fun_rb_cc)
-    rb_mc <- pairwise_interaction(rb$dynamics, mc$dynamics, mask_rb_mc, fun_rb_mc)
-    cc_lt5 <- pairwise_interaction(cc$dynamics, mc$dynamics, mask_lt5, fun_lt5)
-    
-    # collate interactions
-    interactions <- list(mc_lt4, cc_all, mc_rec, rb_cc, rb_mc, cc_lt5)
-    
-  } else {
-    
-    # pull out target dynamics objects
-    cc <- pops[[which(sp_list == "Common carp")]]
-    bf <- pops[[which(sp_list == "River blackfish")]]
-    
-    # carp negatively affect smaller BF
-    mask_lt4 <- transition(bf$dynamics$matrix, dim = 1:4)
-    fun_lt4 <- function(x, n, interacting = TRUE) {
-      # n is the population vector of carp
-      out <- x
-      if (interacting)
-        out <- x * exp(-sum(n[3:28]) / 100000)
-      out
-    }
-    
-    # carp benefit from smaller BF
-    mask_all <- transition(cc$dynamics$matrix)
-    fun_all <- function(x, n, interacting = TRUE) {
-      # n is the population vector of MC
-      out <- x
-      if (interacting)
-        out <- x / (1 + x * sum(n[1:4]) / 100000)
-      out
-    }
-    
-    # carp reduce BF recruitment
-    mask_rec <- reproduction(bf$dynamics$matrix)
-    fun_rec <- function(x, n, interacting = TRUE) {
-      # n is the population vector of carp
-      out <- x
-      if (interacting)
-        out <- x * exp(-sum(n[3:28]) / 100000)
-      out
-    }
-    
-    # big BF reduce survival of small carp
-    mask_lt5 <- transition(cc$dynamics$matrix, dim = 1:5)
-    fun_lt5 <- function(x, n, interacting = TRUE) {
-      # n is the population vector of MC
-      out <- x
-      if (interacting)
-        out <- x * exp(-sum(n[5:11]) / 2000)
-      out
-    }
-    
-    # combine masks and functions into pairwise_interaction objects
-    bf_lt4 <- pairwise_interaction(bf$dynamics, cc$dynamics, mask_lt4, fun_lt4)
-    cc_all <- pairwise_interaction(cc$dynamics, bf$dynamics, mask_all, fun_all)
-    bf_rec <- pairwise_interaction(bf$dynamics, cc$dynamics, mask_rec, fun_rec)
-    cc_lt5 <- pairwise_interaction(cc$dynamics, bf$dynamics, mask_lt5, fun_lt5)
-    
-    # collate interactions
-    interactions <- list(bf_lt4, cc_all, bf_rec, cc_lt5)
-    
-  }
-  
-  # return
-  interactions
   
 }
 

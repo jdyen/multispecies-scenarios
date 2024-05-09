@@ -379,6 +379,12 @@ for (i in seq_along(wb_list)) {
   metrics_wb <- metrics_observed |> filter(waterbody == !!wb_list[i])
   metrics_wb_cf<- metrics_counterfactual |> filter(waterbody == !!wb_list[i])
   
+  # check for NA values in the metrics, fill with waterbody median if needed
+  metrics_wb <- metrics_wb |>
+    mutate(across(contains("nday_"), fill_na))
+  metrics_wb_cf <- metrics_wb_cf |>
+    mutate(across(contains("nday_"), fill_na))
+  
   # create base population dynamics objects
   pops <- prepare_pop(
     metrics_wb, 
@@ -436,8 +442,58 @@ for (i in seq_along(wb_list)) {
   )
   
   # save outputs
-  qsave(sims, file = "outputs/simulations/sims-", wb_list[i], ".qs")
+  qsave(sims, file = paste0("outputs/simulations/sims-", wb_list[i], ".qs"))
+  
+  # extract initial conditions for forecasts from sims_observed
+  init_future <- lapply(sims[[1]], \(x) x[, , dim(x)[3]])
+  
+  # simulate futures
+  future_sub <- metrics_future |>
+    filter(waterbody == wb_list[i]) |>
+    distinct(future, future_next, scenario, scenario_next)
+  
+  # run through each future and generate forecasts
+  for (j in seq_len(nrow(future_sub))) {
+    
+    # pull out metrics for a given scenario and calculate arguments
+    metrics_future_sub <- metrics_future |>
+      filter(
+        future == future_sub$future[j],
+        future_next == future_sub$future_next[j],
+        scenario == future_sub$scenario[j],
+        scenario_next == future_sub$scenario_next[j]
+      )
+    args_future <- prepare_args(
+      metrics = metrics_future_sub,
+      waterbody = wb_list[i],
+      pops = pop_list
+    )
+    
+    # simulate under the specific scenario
+    sims_future <- simulate_scenario(
+      x = mspop,
+      nsim = nsim,
+      init = init_future, 
+      args = args_future,
+      args2 = NULL,
+      args_burnin = NULL
+    )
+    
+    # and save output
+    future_name <- paste(
+      future_sub$future[j],
+      future_sub$future_next[j],
+      future_sub$scenario[j],
+      future_sub$scenario_next[j],
+      sep = "_"
+    )
+    qsave(
+      sims_future, 
+      file = paste0(
+        "outputs/simulations/future-", wb_list[i], "-", future_name, ".qs"
+      )
+    )
+    
+  }
   
 }
-
-# TODO: consider future scenarios and how to implement
