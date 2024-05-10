@@ -43,6 +43,16 @@ estimate_cpue <- function(
       ) |>
       ungroup()
     
+    # add a filter to drop out systems where a species isn't 
+    #   detected
+    include <- x |>
+      group_by(waterbody, reach_no) |>
+      summarise(include = sum(catch) > 0) |>
+      ungroup()
+    x <- x |>
+      left_join(include, by = c("waterbody", "reach_no")) |>
+      filter(include)
+    
     # fit model
     if (recruit) {
       
@@ -146,7 +156,7 @@ summarise_sim <- function(x, y, subset, probs, growth_rate = TRUE, zscale = TRUE
   
   # collate raw predicted values, dropping first column
   out <- tibble(
-    y,
+    waterbody = y,
     mid = apply(abund, 2, median),
     lower = apply(abund, 2, quantile, probs = probs[1]),
     upper = apply(abund, 2, quantile, probs = probs[2])
@@ -256,11 +266,8 @@ calculate_val_metrics <- function(
   # use functions above to summarise the simulated population trajectories
   x <- mapply(
     summarise_sim, 
-    x = x$sims,
-    y = lapply(
-      seq_len(nrow(x$scenario)),
-      \(i) x$scenario[i, ]
-    ),
+    x = x,
+    y = names(x),
     MoreArgs = list(
       subset = subset, probs = probs, growth_rate = !recruit
     ),

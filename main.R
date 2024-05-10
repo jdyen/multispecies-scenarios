@@ -8,14 +8,14 @@
 #     Murray-Darling Rainbowfish (Melanotaenia fluviatilis)
 #
 # Target waterways:
-#     TBD
+#     As for single-species scenarios
 #
 # Flow scenarios consider observed daily flows with and without 
 #    e-water allocations and near-term (to 2025) forecasts of flows under
 #    different plausible climates and flow management strategies
 
 # Author: Jian Yen (jian.yen [at] deeca.vic.gov.au)
-# Last updated: 8 May 2024
+# Last updated: 10 May 2024
 
 # load some packages
 library(qs)
@@ -30,16 +30,18 @@ library(ggplot2)
 library(ragg)
 library(rstanarm)
 library(bayesplot)
+library(patchwork)
 
 # and some load helpers
 source("R/utils.R")
+source("R/interactions.R")
 source("R/fish.R")
 source("R/flow.R")
 source("R/validation.R")
 
 # settings
 set.seed(2024-05-01)
-nsim <- 50
+nsim <- 10
 nburnin <- 10
 simulate_again <- TRUE
 
@@ -399,9 +401,15 @@ for (i in seq_along(wb_list)) {
     pop_list <- list(pops$bf, pops$cc)
   }
   
-  # compile a multispecies dynamics object
-  interactions <- specify_interactions(pop_list)
+  # compile a multispecies dynamics object for three levels of interaction
+  #   strength (note: scale affects carrying capacities, so halving scale 
+  #   doubles the strength of interactions [approximately])
+  interactions <- specify_interactions(pop_list, scale = 1)
+  interactions_double <- specify_interactions(pop_list, scale = 0.5)
+  interactions_half <- specify_interactions(pop_list, scale = 2)
   mspop <- do.call(multispecies, interactions)
+  mspop_double <- do.call(multispecies, interactions_double)
+  mspop_half <- do.call(multispecies, interactions_half)
   
   # check the order of species in the ms object
   species_order <- match_pops(mspop, pop_list)
@@ -440,9 +448,27 @@ for (i in seq_along(wb_list)) {
     args2 = args_counterfactual,
     args_burnin = args_burnin
   )
+  sims_double <- simulate_scenario(
+    x = mspop_double,
+    nsim = nsim,
+    init = inits, 
+    args = args_observed,
+    args2 = args_counterfactual,
+    args_burnin = args_burnin
+  )
+  sims_half <- simulate_scenario(
+    x = mspop_half,
+    nsim = nsim,
+    init = inits, 
+    args = args_observed,
+    args2 = args_counterfactual,
+    args_burnin = args_burnin
+  )
   
   # save outputs
   qsave(sims, file = paste0("outputs/simulations/sims-", wb_list[i], ".qs"))
+  qsave(sims_double, file = paste0("outputs/simulations/sensitivity-double-sims-", wb_list[i], ".qs"))
+  qsave(sims_half, file = paste0("outputs/simulations/sensitivity-half-sims-", wb_list[i], ".qs"))
   
   # extract initial conditions for forecasts from sims_observed
   init_future <- lapply(sims[[1]], \(x) x[, , dim(x)[3]])
@@ -497,3 +523,227 @@ for (i in seq_along(wb_list)) {
   }
   
 }
+
+# load main sims files
+sim_files <- dir("outputs/simulations/")
+sim_files <- sim_files[grepl("^sims-", sim_files)]
+sims_main <- lapply(sim_files, \(x) qread(paste0("outputs/simulations/", x)))
+
+# model CPUE using an AR1 model to estimate values (simple AR1 model with
+#   random terms to soak up variation)
+iter <- 2000
+warmup <- 1000
+chains <- 3
+cores <- 3
+use_cached <- TRUE
+cpue_mc <- estimate_cpue(
+  x = cpue, 
+  use_cached = use_cached,
+  species = "Maccullochella peelii",
+  iter = iter,
+  warmup = warmup,
+  chains = chains,
+  cores = cores
+)                       
+cpue_recruit_mc <- estimate_cpue(
+  x = cpue_recruits, 
+  recruit = TRUE,
+  use_cached = use_cached,
+  species = "Maccullochella peelii",
+  iter = iter,
+  warmup = warmup,
+  chains = chains,
+  cores = cores
+)                       
+cpue_adult_mc <- estimate_cpue(
+  x = cpue_adults, 
+  adult = TRUE,
+  use_cached = use_cached,
+  species = "Maccullochella peelii",
+  iter = iter,
+  warmup = warmup,
+  chains = chains,
+  cores = cores
+)                       
+cpue_bf <- estimate_cpue(
+  x = cpue, 
+  use_cached = use_cached,
+  species = "Gadopsis marmoratus",
+  iter = iter,
+  warmup = warmup,
+  chains = chains,
+  cores = cores
+)                       
+cpue_recruit_bf <- estimate_cpue(
+  x = cpue_recruits, 
+  recruit = TRUE,
+  use_cached = use_cached,
+  species = "Gadopsis marmoratus",
+  iter = iter,
+  warmup = warmup,
+  chains = chains,
+  cores = cores
+)       
+cpue_cc <- estimate_cpue(
+  x = cpue, 
+  use_cached = use_cached,
+  species = "Cyprinus carpio",
+  iter = iter,
+  warmup = warmup,
+  chains = chains,
+  cores = cores
+)                       
+cpue_recruit_cc <- estimate_cpue(
+  x = cpue_recruits, 
+  recruit = TRUE,
+  use_cached = use_cached,
+  species = "Cyprinus carpio",
+  iter = iter,
+  warmup = warmup,
+  chains = chains,
+  cores = cores
+)                       
+cpue_rb <- estimate_cpue(
+  x = cpue, 
+  use_cached = use_cached,
+  species = "Melanotaenia fluviatilis",
+  iter = iter,
+  warmup = warmup,
+  chains = chains,
+  cores = cores
+)                       
+
+# posterior checks (saved to figures)
+pp_mc <- pp_check(cpue_mc) + scale_x_log10() + xlab("Catch (total)") + ylab("Density") + theme(legend.position = "none")
+pp_bf <- pp_check(cpue_bf) + scale_x_log10() + xlab("Catch (total)") + ylab("Density") + theme(legend.position = "none")
+pp_mc_adult <- pp_check(cpue_adult_mc) + scale_x_log10() + xlab("Catch (adults)") + ylab("Density") + theme(legend.position = "none")
+pp_mc_recruit <- pp_check(cpue_recruit_mc) + scale_x_log10() + xlab("Catch (young of year)") + ylab("Density") + theme(legend.position = "none")
+pp_bf_recruit <- pp_check(cpue_recruit_bf) + scale_x_log10() + xlab("Catch (young of year)") + ylab("Density") + theme(legend.position = "none")
+pp_cc <- pp_check(cpue_cc) + scale_x_log10() + xlab("Catch (total)") + ylab("Density") + theme(legend.position = "none")
+pp_cc_recruit <- pp_check(cpue_recruit_cc) + scale_x_log10() + xlab("Catch (young of year)") + ylab("Density") + theme(legend.position = "none")
+pp_rb <- pp_check(cpue_rb) + scale_x_log10() + xlab("Catch (total)") + ylab("Density") + theme(legend.position = "none")
+pp_all <- (pp_mc | pp_mc_recruit) /
+  (pp_mc_adult | pp_bf) /
+  (pp_bf_recruit | pp_rb) +
+  (pp_cc | pp_cc_recruit) +
+  plot_annotation(tag_levels = "a")
+ggsave(
+  filename = "outputs/figures/pp-checks.png",
+  plot = pp_all,
+  device = ragg::agg_png,
+  width = 6,
+  height = 8,
+  units = "in",
+  dpi = 600,
+  bg = "white"
+)
+
+# validation on main sims files (sims_main[[i]][[1]])
+names(sims_main) <- gsub("sims-|\\.qs", "", sim_files)
+mc_sim_metrics <- calculate_val_metrics(
+  x = lapply(sims_main[northern_rivers], \(x) x[[1]][[1]]),
+  cpue_mod = cpue_mc,
+  subset = 1:50, 
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year)
+)
+mc_sim_metrics_adult <- calculate_val_metrics(
+  x = lapply(sims_main[northern_rivers], \(x) x[[1]][[1]]),
+  cpue_mod = cpue_adult_mc,
+  subset = 5:50, 
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year)
+)
+mc_sim_metrics_recruit <- calculate_val_metrics(
+  x = lapply(sims_main[northern_rivers], \(x) x[[1]][[1]]),
+  cpue_mod = cpue_recruit_mc,
+  recruit = TRUE,
+  subset = 1, 
+  sim_years = (min(metrics_observed$water_year) - 1L):max(metrics_observed$water_year)
+)
+bf_sim_metrics <- calculate_val_metrics(
+  x = lapply(sims_main[!names(sims_main) %in% northern_rivers], \(x) x[[1]][[1]]),
+  cpue = cpue_bf,
+  subset = 1:11, 
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year)
+)
+bf_sim_metrics_recruit <- calculate_val_metrics(
+  x = lapply(sims_main[!names(sims_main) %in% northern_rivers], \(x) x[[1]][[1]]),
+  cpue_mod = cpue_recruit_bf,
+  recruit = TRUE,
+  subset = 1, 
+  sim_years = (min(metrics_observed$water_year) - 1L):max(metrics_observed$water_year)
+)
+cc_sim_metrics <- calculate_val_metrics(
+  x = lapply(sims_main, \(x) x[[1]][[2]]),
+  cpue = cpue_cc,
+  subset = 1:11, 
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year)
+)
+cc_sim_metrics_recruit <- calculate_val_metrics(
+  x = lapply(sims_main, \(x) x[[1]][[2]]),
+  cpue_mod = cpue_recruit_cc,
+  recruit = TRUE,
+  subset = 1, 
+  sim_years = (min(metrics_observed$water_year) - 1L):max(metrics_observed$water_year)
+)
+rb_sim_metrics <- calculate_val_metrics(
+  x = lapply(sims_main[northern_rivers], \(x) x[[1]][[3]]),
+  cpue = cpue_rb,
+  subset = 1:7, 
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year)
+)
+sim_metrics <- bind_rows(
+  mc_sim_metrics |> mutate(species = "Murray Cod"),
+  mc_sim_metrics_recruit |> mutate(species = "Murray Cod (young of year)"),
+  mc_sim_metrics_adult |> mutate(species = "Murray Cod (adults)")
+)
+metrics_plot_mc <- plot_metric(sim_metrics)
+metrics_plot_rb <- plot_metric(rb_sim_metrics |> mutate(species = "Murray-Darling Rainbowfish"))
+metrics_plot_bf <- plot_metric(
+  bind_rows(
+    bf_sim_metrics |> mutate(species = "River Blackfish"),
+    bf_sim_metrics_recruit |> mutate(species = "River Blackfish (young of year)")
+  )
+)
+
+# TODO: Fix up carp recriut metrics calc and this plot (check plot_metric for filtering)
+metrics_plot_cc <- plot_metric(
+  bind_rows(
+    cc_sim_metrics |> mutate(species = "Common Carp")#,
+    # cc_sim_metrics_recruit |> mutate(species = "Common Carp (young of year)")
+  )
+)
+ggsave(
+  filename = "outputs/figures/metrics-mc.png",
+  plot = metrics_plot_mc,
+  device = ragg::agg_png,
+  width = 7,
+  height = 6,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/metrics-bf.png",
+  plot = metrics_plot_bf,
+  device = ragg::agg_png,
+  width = 7,
+  height = 6,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/metrics-rb.png",
+  plot = metrics_plot_rb,
+  device = ragg::agg_png,
+  width = 7,
+  height = 6,
+  units = "in",
+  dpi = 600
+)
+
+# compare the four scenarios (obs, obs-noint, cf, cf-noint)
+# sims_main[[i]][1:4]
+
+# check sensitivity to interaction strength
+
+# plot futures
+
