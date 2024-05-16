@@ -15,7 +15,7 @@
 #    different plausible climates and flow management strategies
 
 # Author: Jian Yen (jian.yen [at] deeca.vic.gov.au)
-# Last updated: 16 May 2024
+# Last updated: 17 May 2024
 
 # load some packages
 library(qs)
@@ -41,7 +41,7 @@ source("R/validation.R")
 
 # settings
 set.seed(2024-05-01)
-nsim <- 1000
+nsim <- 100
 nburnin <- 10
 simulate_again <- TRUE
 
@@ -406,9 +406,9 @@ if (simulate_again | !sims_exist) {
     # compile a multispecies dynamics object for three levels of interaction
     #   strength (note: scale affects carrying capacities, so halving scale 
     #   doubles the strength of interactions [approximately])
-    interactions <- specify_interactions(pop_list, scale = 1)
-    interactions_double <- specify_interactions(pop_list, scale = 0.5)
-    interactions_half <- specify_interactions(pop_list, scale = 2)
+    interactions <- specify_interactions(pop_list, scale = 2)
+    interactions_double <- specify_interactions(pop_list, scale = 1)
+    interactions_half <- specify_interactions(pop_list, scale = 4)
     mspop <- do.call(multispecies, interactions)
     mspop_double <- do.call(multispecies, interactions_double)
     mspop_half <- do.call(multispecies, interactions_half)

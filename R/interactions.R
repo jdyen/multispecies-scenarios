@@ -96,7 +96,8 @@ specify_interactions <- function(pops, scale = 1, ...) {
     large_mc <- 5:50
     large_carp <- 5:28
     rb_stages <- 1:7
-    kmc <- kcarp <- scale * 10000
+    kmc <- scale * 20000
+    kcarp <- scale * 10000
     krb <- scale * 1000
     
     # specify interactions one-by-one (reciprocating all unless explicitly not
@@ -220,12 +221,12 @@ specify_interactions <- function(pops, scale = 1, ...) {
       fun_largecod_eat_rb
     )
     
-    #   - Moderate negative effect of medium MC on rainbowfish
+    #   - Weak negative effect of medium MC on rainbowfish
     mask_medcod_eat_rb <- transition(
       rb$dynamics$matrix, dim = rb_stages
     )
     fun_medcod_eat_rb <- interaction_fn(
-      k = kmc, theta = 0.22, stage = medium_fish, negative = TRUE
+      k = kmc, theta = 0.05, stage = medium_fish, negative = TRUE
     ) 
     medcod_eat_rb <- pairwise_interaction(
       target = rb$dynamics,
@@ -234,12 +235,12 @@ specify_interactions <- function(pops, scale = 1, ...) {
       fun_medcod_eat_rb
     )
     
-    #   - Moderate negative effect of large carp on rainbowfish
+    #   - Weak negative effect of large carp on rainbowfish
     mask_largecarp_eat_rb <- transition(
       rb$dynamics$matrix, dim = rb_stages
     )
     fun_largecarp_eat_rb <- interaction_fn(
-      k = kcarp, theta = 0.22, stage = large_carp, negative = TRUE
+      k = kcarp, theta = 0.05, stage = large_carp, negative = TRUE
     ) 
     largecarp_eat_rb <- pairwise_interaction(
       target = rb$dynamics,
@@ -248,12 +249,12 @@ specify_interactions <- function(pops, scale = 1, ...) {
       fun_largecarp_eat_rb
     )
     
-    #   - Moderate negative effect of medium carp on rainbowfish
+    #   - Weak negative effect of medium carp on rainbowfish
     mask_medcarp_eat_rb <- transition(
       rb$dynamics$matrix, dim = rb_stages
     )
     fun_medcarp_eat_rb <- interaction_fn(
-      k = kcarp, theta = 0.22, stage = medium_fish, negative = TRUE
+      k = kcarp, theta = 0.05, stage = medium_fish, negative = TRUE
     ) 
     medcarp_eat_rb <- pairwise_interaction(
       target = rb$dynamics,
@@ -262,12 +263,12 @@ specify_interactions <- function(pops, scale = 1, ...) {
       fun_medcarp_eat_rb
     )
     
-    #   - Moderate positive effect of rainbowfish on large MC
+    #   - Weak positive effect of rainbowfish on large MC
     mask_rb_feed_largecod <- transition(
       mc$dynamics$matrix, dim = large_mc
     )
     fun_rb_feed_largecod <- interaction_fn(
-      k = krb, theta = 0.85, stage = rb_stages, negative = FALSE
+      k = krb, theta = 0.2, stage = rb_stages, negative = FALSE
     ) 
     rb_feed_largecod <- pairwise_interaction(
       target = mc$dynamics,
@@ -276,12 +277,12 @@ specify_interactions <- function(pops, scale = 1, ...) {
       fun_rb_feed_largecod
     )
     
-    #   - Moderate positive effect of rainbowfish on medium MC
+    #   - Weak positive effect of rainbowfish on medium MC
     mask_rb_feed_medcod <- transition(
       mc$dynamics$matrix, dim = medium_fish
     )
     fun_rb_feed_medcod <- interaction_fn(
-      k = krb, theta = 0.85, stage = rb_stages, negative = FALSE
+      k = krb, theta = 0.2, stage = rb_stages, negative = FALSE
     ) 
     rb_feed_medcod <- pairwise_interaction(
       target = mc$dynamics,
@@ -290,12 +291,12 @@ specify_interactions <- function(pops, scale = 1, ...) {
       fun_rb_feed_medcod
     )
     
-    #   - Moderate positive effect of rainbowfish on large carp
+    #   - Weak positive effect of rainbowfish on large carp
     mask_rb_feed_largecarp <- transition(
       cc$dynamics$matrix, dim = large_carp
     )
     fun_rb_feed_largecarp <- interaction_fn(
-      k = krb, theta = 0.85, stage = rb_stages, negative = FALSE
+      k = krb, theta = 0.2, stage = rb_stages, negative = FALSE
     ) 
     rb_feed_largecarp <- pairwise_interaction(
       target = cc$dynamics,
@@ -304,12 +305,12 @@ specify_interactions <- function(pops, scale = 1, ...) {
       fun_rb_feed_largecarp
     )
     
-    #   - Moderate positive effect of rainbowfish on medium carp
+    #   - Weak positive effect of rainbowfish on medium carp
     mask_rb_feed_medcarp <- transition(
       cc$dynamics$matrix, dim = medium_fish
     )
     fun_rb_feed_medcarp <- interaction_fn(
-      k = krb, theta = 0.85, stage = rb_stages, negative = FALSE
+      k = krb, theta = 0.2, stage = rb_stages, negative = FALSE
     ) 
     rb_feed_medcarp <- pairwise_interaction(
       target = cc$dynamics,
@@ -349,8 +350,9 @@ specify_interactions <- function(pops, scale = 1, ...) {
     medium_fish <- 2
     large_bf <- 3:11 
     large_carp <- 3:28
-    kbf <- kcarp <- scale * 10000
-    
+    kbf <- scale * 10000
+    kcarp <- scale * 100000
+      
     # specify interactions one-by-one (reciprocating all unless explicitly not
     #    required)    
     
@@ -380,10 +382,10 @@ specify_interactions <- function(pops, scale = 1, ...) {
       fun_smallbf_feed_largecarp
     )
     
-    #   - Moderate negative effect of large blackfish on small carp
+    #   - Strong negative effect of large blackfish on small carp
     mask_largebf_eat_smallcarp <- reproduction(cc$dynamics$matrix)
     fun_largebf_eat_smallcarp <- interaction_fn(
-      k = kbf, theta = 0.22, stage = large_bf, negative = TRUE, cut = FALSE
+      k = kbf, theta = 0.7, stage = large_bf, negative = TRUE, cut = FALSE
     ) 
     largebf_eat_smallcarp <- pairwise_interaction(
       target = cc$dynamics,
@@ -392,12 +394,12 @@ specify_interactions <- function(pops, scale = 1, ...) {
       fun_largebf_eat_smallcarp
     )
     
-    #   - Moderate positive effect of small carp on large blackfish
+    #   - Strong positive effect of small carp on large blackfish
     mask_smallcarp_feed_largebf <- transition(
       bf$dynamics$matrix, dim = large_bf
     )
     fun_smallcarp_feed_largebf <- interaction_fn(
-      k = kcarp, theta = 0.85, stage = small_fish, negative = FALSE
+      k = kcarp, theta = 5, stage = small_fish, negative = FALSE
     ) 
     smallcarp_feed_largebf <- pairwise_interaction(
       target = bf$dynamics,

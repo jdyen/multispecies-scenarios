@@ -554,7 +554,8 @@ prepare_args <- function(metrics, waterbody, pops, nburnin = NULL) {
   metrics_sub <- metrics_sub |>
     mutate(
       flow_variability = spawning_flow_variability,
-      floodplain_access = ifelse(proportional_spring_flow > 2, 1, 0),
+      floodplain_access = proportional_spring_flow / 10,
+      # floodplain_access = ifelse(proportional_spring_flow > 2, 1, 0),
       antecedent_flow = proportional_antecedent_flow,
       blackwater_risk = hypoxia_risk,
       redfin = presence_redfin, 
