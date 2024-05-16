@@ -157,9 +157,9 @@ summarise_sim <- function(x, y, subset, probs, growth_rate = TRUE, zscale = TRUE
   # collate raw predicted values, dropping first column
   out <- tibble(
     waterbody = y,
-    mid = apply(abund, 2, median),
-    lower = apply(abund, 2, quantile, probs = probs[1]),
-    upper = apply(abund, 2, quantile, probs = probs[2])
+    mid = apply(abund, 2, median, na.rm = TRUE),
+    lower = apply(abund, 2, quantile, probs = probs[1], na.rm = TRUE),
+    upper = apply(abund, 2, quantile, probs = probs[2], na.rm = TRUE)
   )
   
   # return
@@ -179,28 +179,27 @@ add_cpue <- function(
   #    generate new samples from the fitted posterior for each year/waterbody,
   #    setting previous cpue to 0 to estimate growth rate directly
   #    (no need to divide by catch_ym1)
-
-    newdata <- cpue_mod$data |> 
-      distinct(waterbody, reach_no, survey_year) |>
-      filter(!is.na(reach_no)) |>
-      mutate(
-        log_cpue_ym1 = 0,
-        effort_h = 1,
-        id_site = "abc"
-      )
-    cpue_pred <- posterior_epred(
-      cpue_mod, 
-      newdata = newdata,
-      re.form = ~ (1 | waterbody / reach_no) +
-        (1 | survey_year)
+  newdata <- cpue_mod$data |> 
+    distinct(waterbody, reach_no, survey_year) |>
+    filter(!is.na(reach_no)) |>
+    mutate(
+      log_cpue_ym1 = 0,
+      effort_h = 1,
+      id_site = "abc"
     )
-    cpue_ar1 <- tibble(
-      newdata,
-      cpue = apply(cpue_pred, 2, median),
-      lower = apply(cpue_pred, 2, quantile, probs = probs[1]),
-      upper = apply(cpue_pred, 2, quantile, probs = probs[2])
-    )
-
+  cpue_pred <- posterior_epred(
+    cpue_mod, 
+    newdata = newdata,
+    re.form = ~ (1 | waterbody / reach_no) +
+      (1 | survey_year)
+  )
+  cpue_ar1 <- tibble(
+    newdata,
+    cpue = apply(cpue_pred, 2, median),
+    lower = apply(cpue_pred, 2, quantile, probs = probs[1]),
+    upper = apply(cpue_pred, 2, quantile, probs = probs[2])
+  )
+  
   # add reach info and rename cpue field
   cpue_ar1 <- cpue_ar1 |>
     mutate(
@@ -259,9 +258,14 @@ calculate_val_metrics <- function(
     x, cpue_mod, 
     subset, 
     sim_years,
+    sp_idx,
     probs = c(0.1, 0.9), 
     recruit = FALSE
 ) {
+  
+  # pull out relevant components of the sims output
+  x_noint <- lapply(x, \(x) x[[2]][[sp_idx]])
+  x <- lapply(x, \(x) x[[1]][[sp_idx]])
   
   # use functions above to summarise the simulated population trajectories
   x <- mapply(
@@ -274,10 +278,26 @@ calculate_val_metrics <- function(
     SIMPLIFY = FALSE
   )
   x <- bind_rows(x)
+  x_noint <- mapply(
+    summarise_sim, 
+    x = x_noint,
+    y = names(x_noint),
+    MoreArgs = list(
+      subset = subset, probs = probs, growth_rate = !recruit
+    ),
+    SIMPLIFY = FALSE
+  )
+  x_noint <- bind_rows(x_noint)
   
   # add estimated CPUE
   x <- add_cpue(
     sim = x,
+    cpue_mod = cpue_mod,
+    sim_years = sim_years,
+    probs = probs
+  )
+  x_noint <- add_cpue(
+    sim = x_noint,
     cpue_mod = cpue_mod,
     sim_years = sim_years,
     probs = probs
@@ -292,10 +312,24 @@ calculate_val_metrics <- function(
       values_from = mid
     ) |>
     mutate(eps = Simulated - Observed)
+  x_noint <- x_noint |>
+    select(waterbody, survey_year, category, mid) |>
+    pivot_wider(
+      id_cols = c(waterbody, survey_year),
+      names_from = category,
+      values_from = mid
+    ) |>
+    mutate(eps = Simulated - Observed)
+  
+  # combine both sets of outputs
+  x <- bind_rows(
+    x |> mutate(type = "interactions"),
+    x_noint |> mutate(type = "no interactions")
+  )
   
   # calculate all the metrics
   x |>
-    group_by(waterbody) |>
+    group_by(waterbody, type) |>
     summarise(
       r = ifelse(
         !all(is.na(Observed)), 
@@ -343,8 +377,15 @@ plot_metric <- function(x) {
         levels = c(
           "Murray Cod", "Murray Cod (young of year)", "Murray Cod (adults)",
           "River Blackfish", "River Blackfish (young of year)",
-          "Murray-Darling Rainbowfish"
+          "Murray-Darling Rainbowfish",
+          "Common Carp", "Common Carp (young of year)"
         )
+      ),
+      type_num = ifelse(type == "interactions", 1, 0.25),
+      type = factor(
+        type,
+        levels = c("interactions", "no interactions"),
+        labels = c("With interactions", "Without interactions")
       )
     )
   
@@ -371,17 +412,22 @@ plot_metric <- function(x) {
   
   # plot 
   p <- x |>
-    ggplot(aes(y = value, x = waterbody, fill = species)) + 
-    geom_bar(position = position_dodge(width = 0.9, preserve = "single"), stat = "identity") +
-    geom_text(
-      aes(y = level, label = label), 
-      position = position_dodge(width = width_set, preserve = "single")
+    ggplot(aes(
+      y = value,
+      x = waterbody, 
+      fill =  species,
+      alpha = type
+    )) + 
+    geom_bar(
+      position = position_dodge(width = 0.9, preserve = "single"),
+      stat = "identity"
     ) +
     geom_hline(data = dummy, aes(yintercept = height), col = "gray30", linewidth = 1.25) +
     ylab("Value") +
     xlab("Waterbody") +
     facet_wrap( ~ metric, scales = "free") +
     scale_fill_brewer(palette = "Set2", name = "") +
+    scale_alpha_manual(values = c(1, 0.4), name = "") +
     ggthemes::theme_hc() +
     theme(
       legend.text = element_text(size = 8),
@@ -424,18 +470,20 @@ plot_hindcasts <- function(
     cpue, 
     subset, 
     sim_years, 
+    sp_idx,
     probs = c(0.1, 0.9), 
     recruit = FALSE
 ) {
   
+  # pull out relevant components of the sims output
+  x_noint <- lapply(x, \(x) x[[2]][[sp_idx]])
+  x <- lapply(x, \(x) x[[1]][[sp_idx]])
+  
   # use functions above to summarise the simulated population trajectories
   x <- mapply(
     summarise_sim, 
-    x = x$sims,
-    y = lapply(
-      seq_len(nrow(x$scenario)),
-      \(i) x$scenario[i, ]
-    ),
+    x = x,
+    y = names(x),
     MoreArgs = list(
       subset = subset, probs = probs, growth_rate = !recruit
     ),
@@ -450,6 +498,44 @@ plot_hindcasts <- function(
     sim_years = sim_years,
     probs = probs
   )
+  
+  # repeat for version without interactions
+  x_noint <- mapply(
+    summarise_sim, 
+    x = x_noint,
+    y = names(x_noint),
+    MoreArgs = list(
+      subset = subset, probs = probs, growth_rate = !recruit
+    ),
+    SIMPLIFY = FALSE
+  )
+  x_noint <- bind_rows(x_noint)
+  
+  # add estimated CPUE
+  x_noint <- add_cpue(
+    sim = x_noint,
+    cpue_mod = cpue,
+    sim_years = sim_years,
+    probs = probs
+  )
+  
+  # bind both together
+  x <- bind_rows(
+    x,
+    x_noint |>
+      filter(category == "Simulated") |>
+      mutate(category = "Simulated (no interactions)")
+  )
+  
+  # remove groups without good data
+  include <- x |>
+    filter(category == "Observed") |>
+    group_by(waterbody) |>
+    summarise(include = any(!is.na(mid))) |>
+    ungroup()
+  x <- x |>
+    left_join(include, by = "waterbody") |>
+    filter(include)
   
   # set up base plot
   p <- x |>
@@ -487,76 +573,76 @@ plot_hindcasts <- function(
   
 }
 
+# function to extract trajectories from a simulation object
+extract_trajectories <- function(
+    scn, x, subset, probs, recruit, sp_idx, zscale, sim_years
+) {
+  
+  # pull out relevant components of the sims output
+  x <- lapply(x, \(x) x[[scn]][[sp_idx]])
+  
+  # use functions above to grab bounds from replicate simulated trajectories
+  x <- mapply(
+    summarise_sim, 
+    x = x,
+    y = names(x),
+    MoreArgs = list(
+      subset = subset, probs = probs, growth_rate = !recruit, zscale = zscale
+    ),
+    SIMPLIFY = FALSE
+  )
+  
+  # flatten
+  x <- bind_rows(x)
+  
+  # add survey year info
+  nwaterbody <- x |> pull(waterbody) |> unique() |> length()
+  x <- x |> mutate(survey_year = rep(c(sim_years[1] - 1, sim_years), nwaterbody))
+  
+  # and return
+  x
+  
+}
+
 # function to plot abundance trajectories from two scenarios
 plot_trajectories <- function(
     x, 
-    y,
     subset,
     sim_years,
+    sp_idx,
     probs = c(0.1, 0.9),
-    marker = NULL,
-    scenarios = c("With e-water", "Without e-water"),
-    .filter = NULL
+    scn = 1:4,
+    .names = c("With e-water", "With e-water (no interactions)",
+               "Without e-water", "Without e-water (no interactions)")
 ) {
   
-  # use functions above to summarise the simulated population trajectories
-  x <- mapply(
-    summarise_sim, 
-    x = x$sims,
-    y = lapply(
-      seq_len(nrow(x$scenario)),
-      \(i) x$scenario[i, ]
-    ),
-    MoreArgs = list(
-      subset = subset, probs = probs, growth_rate = FALSE, zscale = FALSE
-    ),
-    SIMPLIFY = FALSE
+  # extract and summarise sims for all scenarios
+  x <- lapply(
+    scn,
+    extract_trajectories,
+    x = x,
+    subset = subset, 
+    probs = probs, 
+    recruit = TRUE,
+    zscale = FALSE,
+    sp_idx = sp_idx,
+    sim_years = sim_years
   )
-  x <- bind_rows(x)
-  y <- mapply(
-    summarise_sim, 
-    x = y$sims,
-    y = lapply(
-      seq_len(nrow(y$scenario)),
-      \(i) y$scenario[i, ]
-    ),
-    MoreArgs = list(
-      subset = subset, probs = probs, growth_rate = FALSE, zscale = FALSE
-    ),
-    SIMPLIFY = FALSE
-  )
-  y <- bind_rows(y)
   
-  # add in survey year info to simulated values
-  nwaterbody <- x |> pull(waterbody) |> unique() |> length()
-  x <- x |> mutate(survey_year = rep(c(sim_years[1] - 1, sim_years), nwaterbody))
-  nwaterbody <- y |> pull(waterbody) |> unique() |> length()
-  y <- y |> mutate(survey_year = rep(c(sim_years[1] - 1, sim_years), nwaterbody))
+  # and add scenario names  
+  x <- mapply(
+    \(x, y) x |> mutate(Scenario = y),
+    x = x,
+    y = .names,
+    SIMPLIFY = FALSE
+  )
   
   # combine both scenarios into a single object
-  x <- bind_rows(
-    x |> mutate(Scenario = scenarios[1]),
-    y |> mutate(Scenario = scenarios[2])
-  )
-  
-  # add labels to mark "poor" performers if required
-  x <- x |>
-    mutate(waterbody = .river_lookup[waterbody])
-  if (!is.null(marker)) {
-    new_names <- sort(unique(x$waterbody))
-    names(new_names) <- new_names
-    new_names[marker] <- paste0(new_names[marker], "*")
-    x <- x |>
-      mutate(waterbody = new_names[waterbody])
-  }
-  
-  # filter if required
-  if (!is.null(.filter)) {
-    x <- x |> filter(waterbody == .filter)
-  }
+  x <- do.call(bind_rows, x)
   
   # set up base plot
   p <- x |>
+    mutate(waterbody = .river_lookup[waterbody]) |>
     ggplot(aes(x = survey_year, y = mid, col = Scenario, group = Scenario)) +
     geom_point(position = position_dodge(width = 0)) +
     geom_line(position = position_dodge(width = 0)) +
@@ -577,41 +663,66 @@ plot_trajectories <- function(
       axis.text = element_text(size = 8),
       panel.border = element_rect(fill = NA, colour = "gray30", linetype = 1),
       strip.background = element_rect(fill = "white")
-    )
-  
-  # 
-  if (is.null(.filter))
-    p <- p + facet_wrap( ~ waterbody, scales = "free")
+    ) +
+    facet_wrap( ~ waterbody, scales = "free_y")
   
   # and return
   p
   
 }
 
-# function to plot near-term forecasts from start to final observed year
-plot_forecasts <- function(
-    x, subset, probs, system = NULL, target = NULL, climate = NULL, marker = NULL
+# function to summarise forecasts for all systems for a single species
+summarise_forecasts <- function(  
+    x, 
+    subset,
+    sp_idx,
+    probs = c(0.1, 0.9),
+    scn = 1:2,
+    .names = c("With interactions", "Without interactions")
 ) {
   
   # use functions above to summarise the simulated population trajectories
-  nscn <- nrow(x$scenario)
+  x <- lapply(
+    scn,
+    extract_trajectories,
+    x = x,
+    subset = subset,
+    probs = probs,
+    recruit = TRUE,
+    zscale = FALSE,
+    sp_idx = sp_idx,
+    sim_years = 2024:2025
+  )
+  
+  # parse future scenario names into a useful format 
+  x <- lapply(
+    x,
+    \(.x) .x |>
+      mutate(
+        scenario = sapply(waterbody, \(x) strsplit(x, "-")[[1]][2]),
+        waterbody = sapply(waterbody, \(x) strsplit(x, "-")[[1]][1]),
+        future = sapply(scenario, \(x) strsplit(x, "_")[[1]][1]),
+        future_next = sapply(scenario, \(x) strsplit(x, "_")[[1]][2]),
+        scenario_next = sapply(scenario, \(x) strsplit(x, "_")[[1]][4]),
+        scenario = sapply(scenario, \(x) strsplit(x, "_")[[1]][3])
+      )
+  )    
+  
+  # and add scenario names
   x <- mapply(
-    summarise_sim, 
-    x = x$sims,
-    y = lapply(
-      seq_len(nscn),
-      \(i) x$scenario[i, ]
-    ),
-    MoreArgs = list(
-      subset = subset, probs = probs, growth_rate = FALSE, zscale = FALSE
-    ),
+    \(x, y) x |> mutate(Scenario = y),
+    x = x,
+    y = .names,
     SIMPLIFY = FALSE
   )
-  x <- bind_rows(x)
   
-  # add year information
-  x <- x |>
-    mutate(survey_year = rep(c(2023:2025), times = nscn))
+  # combine both scenarios into a single object
+  do.call(bind_rows, x)
+  
+}
+
+# function to plot near-term forecasts from start to final observed year
+plot_forecasts <- function(x, system = NULL, target = NULL, climate = NULL) {
   
   # clean up variable values
   x <- x |>
@@ -652,17 +763,9 @@ plot_forecasts <- function(
   if (!is.null(system))
     x <- x |> filter(waterbody == system)
   
-  # add labels to mark "poor" performers if required
-  x <- x |>
-    mutate(waterbody = .river_lookup[waterbody])
-  if (!is.null(marker)) {
-    new_names <- sort(unique(x$waterbody))
-    names(new_names) <- new_names
-    new_names[marker] <- paste0(new_names[marker], "*")
-    x <- x |>
-      mutate(waterbody = new_names[waterbody])
-  }
-  
+  # rename waterbodies for plotting
+  x <- x |> mutate(waterbody = .river_lookup[waterbody])
+
   # if showing all climates, need a plot that expands out
   if (is.null(climate)) {
     
@@ -674,10 +777,8 @@ plot_forecasts <- function(
           future_next == "Ave. (2024/2025)",
           scenario_next == "None"
         ) |>
-        mutate(
-          future = factor(future, labels = c("Dry", "Ave.", "Wet"))
-        ) |>
-        ggplot(aes(y = mid, x = future, fill = scenario)) +
+        mutate(future = factor(future, labels = c("Dry", "Ave.", "Wet"))) |>
+        ggplot(aes(y = mid, x = future, fill = scenario, alpha = Scenario)) +
         geom_bar(position = position_dodge(0.9), stat = "identity") +
         geom_errorbar(
           aes(ymin = lower, ymax = upper),
@@ -687,6 +788,7 @@ plot_forecasts <- function(
         ) +
         xlab("Climate state") +
         ylab("Abundance") +
+        scale_alpha_manual(values = c(1, 0.4), name = "") +
         scale_fill_brewer(name = "Flow priority", palette = "Set2") +
         ggthemes::theme_hc() +
         theme(
@@ -713,7 +815,9 @@ plot_forecasts <- function(
       #  plot it
       p <- x |>
         mutate(survey_year = factor(survey_year)) |>
-        ggplot(aes(y = mid, x = scenario_next, fill = scenario)) +
+        ggplot(
+          aes(y = mid, x = scenario_next, fill = scenario, alpha = Scenario)
+        ) +
         geom_bar(position = position_dodge(0.9), stat = "identity") +
         geom_errorbar(
           aes(ymin = lower, ymax = upper),
@@ -723,6 +827,7 @@ plot_forecasts <- function(
         ) +
         xlab("Flow priority (2024/2025)") +
         ylab("Abundance") +
+        scale_alpha_manual(values = c(1, 0.4), name = "") +
         scale_fill_brewer(name = "Flow priority (2023/2024)", palette = "Set2") +
         facet_grid(future_next ~ future) +
         ggthemes::theme_hc() +
@@ -743,7 +848,9 @@ plot_forecasts <- function(
     p <- x |>
       filter(future == climate) |>
       mutate(survey_year = factor(survey_year)) |>
-      ggplot(aes(y = mid, x = scenario_next, fill = scenario)) +
+      ggplot(
+        aes(y = mid, x = scenario_next, fill = scenario, alpha = Scenario)
+      ) +
       geom_bar(position = position_dodge(0.9), stat = "identity") +
       geom_errorbar(
         aes(ymin = lower, ymax = upper),
@@ -753,6 +860,7 @@ plot_forecasts <- function(
       ) +
       xlab("Flow priority (2024/2025)") +
       ylab("Abundance") +
+      scale_alpha_manual(values = c(1, 0.4), name = "") +
       scale_fill_brewer(name = "Flow priority (2023/2024)", palette = "Set2") +
       facet_grid( ~ future_next) +
       ggthemes::theme_hc() +

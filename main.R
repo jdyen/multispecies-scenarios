@@ -15,7 +15,7 @@
 #    different plausible climates and flow management strategies
 
 # Author: Jian Yen (jian.yen [at] deeca.vic.gov.au)
-# Last updated: 10 May 2024
+# Last updated: 16 May 2024
 
 # load some packages
 library(qs)
@@ -41,7 +41,7 @@ source("R/validation.R")
 
 # settings
 set.seed(2024-05-01)
-nsim <- 10
+nsim <- 1000
 nburnin <- 10
 simulate_again <- TRUE
 
@@ -369,158 +369,164 @@ metrics_future <- metrics_future |>
     by = "waterbody"
   )
 
-# loop over all waterbodies and fit a model for each
+# loop over all waterbodies and fit a model for each if required
 wb_list <- metrics_observed |> pull(waterbody) |> unique()
 northern_rivers <- c(
   "broken_creek_r4", "broken_river_r3", "campaspe_river_r4", 
   "goulburn_river_r4", "loddon_river_r4", "ovens_river_r5"
 )
-for (i in seq_along(wb_list)) {
-  
-  # pull out metrics for the target waterbody
-  metrics_wb <- metrics_observed |> filter(waterbody == !!wb_list[i])
-  metrics_wb_cf<- metrics_counterfactual |> filter(waterbody == !!wb_list[i])
-  
-  # check for NA values in the metrics, fill with waterbody median if needed
-  metrics_wb <- metrics_wb |>
-    mutate(across(contains("nday_"), fill_na))
-  metrics_wb_cf <- metrics_wb_cf |>
-    mutate(across(contains("nday_"), fill_na))
-  
-  # create base population dynamics objects
-  pops <- prepare_pop(
-    metrics_wb, 
-    waterbody = wb_list[i],
-    stocking = stocking
-  )
-  
-  # pull out system-appropriate populations/species 
-  if (wb_list[i] %in% northern_rivers) {
-    pop_list <- list(pops$mc, pops$cc, pops$rb)
-  } else {
-    pop_list <- list(pops$bf, pops$cc)
-  }
-  
-  # compile a multispecies dynamics object for three levels of interaction
-  #   strength (note: scale affects carrying capacities, so halving scale 
-  #   doubles the strength of interactions [approximately])
-  interactions <- specify_interactions(pop_list, scale = 1)
-  interactions_double <- specify_interactions(pop_list, scale = 0.5)
-  interactions_half <- specify_interactions(pop_list, scale = 2)
-  mspop <- do.call(multispecies, interactions)
-  mspop_double <- do.call(multispecies, interactions_double)
-  mspop_half <- do.call(multispecies, interactions_half)
-  
-  # check the order of species in the ms object
-  species_order <- match_pops(mspop, pop_list)
-  
-  # prepare args and inits
-  args_burnin <- prepare_args(
-    metrics = metrics_wb,
-    waterbody = wb_list[i],
-    pops = pop_list,
-    nburnin = nburnin
-  )
-  args_observed <- prepare_args(
-    metrics = metrics_wb,
-    waterbody = wb_list[i],
-    pops = pop_list
-  )
-  args_counterfactual <- prepare_args(
-    metrics = metrics_wb_cf,
-    waterbody = wb_list[i],
-    pops = pop_list
-  )
-  inits <- prepare_inits(
-    waterbody = wb_list[i],
-    cpue = cpue,
-    metrics = metrics_wb,
-    pops = pop_list,
-    nsim = nsim
-  )
-  
-  # simulate population dynamics for target system
-  sims <- simulate_scenario(
-    x = mspop,
-    nsim = nsim,
-    init = inits, 
-    args = args_observed,
-    args2 = args_counterfactual,
-    args_burnin = args_burnin
-  )
-  sims_double <- simulate_scenario(
-    x = mspop_double,
-    nsim = nsim,
-    init = inits, 
-    args = args_observed,
-    args2 = args_counterfactual,
-    args_burnin = args_burnin
-  )
-  sims_half <- simulate_scenario(
-    x = mspop_half,
-    nsim = nsim,
-    init = inits, 
-    args = args_observed,
-    args2 = args_counterfactual,
-    args_burnin = args_burnin
-  )
-  
-  # save outputs
-  qsave(sims, file = paste0("outputs/simulations/sims-", wb_list[i], ".qs"))
-  qsave(sims_double, file = paste0("outputs/simulations/sensitivity-double-sims-", wb_list[i], ".qs"))
-  qsave(sims_half, file = paste0("outputs/simulations/sensitivity-half-sims-", wb_list[i], ".qs"))
-  
-  # extract initial conditions for forecasts from sims_observed
-  init_future <- lapply(sims[[1]], \(x) x[, , dim(x)[3]])
-  
-  # simulate futures
-  future_sub <- metrics_future |>
-    filter(waterbody == wb_list[i]) |>
-    distinct(future, future_next, scenario, scenario_next)
-  
-  # run through each future and generate forecasts
-  for (j in seq_len(nrow(future_sub))) {
+sims_exist <- any(grepl("^sims-", dir("outputs/simulations/")))
+if (simulate_again | !sims_exist) {
+  for (i in seq_along(wb_list)) {
     
-    # pull out metrics for a given scenario and calculate arguments
-    metrics_future_sub <- metrics_future |>
-      filter(
-        future == future_sub$future[j],
-        future_next == future_sub$future_next[j],
-        scenario == future_sub$scenario[j],
-        scenario_next == future_sub$scenario_next[j]
-      )
-    args_future <- prepare_args(
-      metrics = metrics_future_sub,
+    # pull out metrics for the target waterbody
+    metrics_wb <- metrics_observed |> filter(waterbody == !!wb_list[i])
+    metrics_wb_cf<- metrics_counterfactual |> filter(waterbody == !!wb_list[i])
+    
+    # check for NA values in the metrics, fill with waterbody median if needed
+    metrics_wb <- metrics_wb |>
+      mutate(across(contains("nday_"), fill_na))
+    metrics_wb_cf <- metrics_wb_cf |>
+      mutate(across(contains("nday_"), fill_na))
+    
+    # create base population dynamics objects
+    pops <- prepare_pop(
+      metrics_wb, 
+      waterbody = wb_list[i],
+      stocking = stocking
+    )
+    
+    # pull out system-appropriate populations/species 
+    if (wb_list[i] %in% northern_rivers) {
+      pop_list <- list(pops$mc, pops$cc, pops$rb)
+    } else {
+      pop_list <- list(pops$bf, pops$cc)
+    }
+    
+    # compile a multispecies dynamics object for three levels of interaction
+    #   strength (note: scale affects carrying capacities, so halving scale 
+    #   doubles the strength of interactions [approximately])
+    interactions <- specify_interactions(pop_list, scale = 1)
+    interactions_double <- specify_interactions(pop_list, scale = 0.5)
+    interactions_half <- specify_interactions(pop_list, scale = 2)
+    mspop <- do.call(multispecies, interactions)
+    mspop_double <- do.call(multispecies, interactions_double)
+    mspop_half <- do.call(multispecies, interactions_half)
+    
+    # check the order of species in the ms object
+    species_order <- match_pops(mspop, pop_list)
+    
+    # prepare args and inits
+    args_burnin <- prepare_args(
+      metrics = metrics_wb,
+      waterbody = wb_list[i],
+      pops = pop_list,
+      nburnin = nburnin
+    )
+    args_observed <- prepare_args(
+      metrics = metrics_wb,
       waterbody = wb_list[i],
       pops = pop_list
     )
+    args_counterfactual <- prepare_args(
+      metrics = metrics_wb_cf,
+      waterbody = wb_list[i],
+      pops = pop_list
+    )
+    inits <- prepare_inits(
+      waterbody = wb_list[i],
+      cpue = cpue,
+      metrics = metrics_wb,
+      pops = pop_list,
+      nsim = nsim
+    )
     
-    # simulate under the specific scenario
-    sims_future <- simulate_scenario(
+    # simulate population dynamics for target system
+    sims <- simulate_scenario(
       x = mspop,
       nsim = nsim,
-      init = init_future, 
-      args = args_future,
-      args2 = NULL,
-      args_burnin = NULL
+      init = inits, 
+      args = args_observed,
+      args2 = args_counterfactual,
+      args_burnin = args_burnin
+    )
+    sims_double <- simulate_scenario(
+      x = mspop_double,
+      nsim = nsim,
+      init = inits, 
+      args = args_observed,
+      args2 = args_counterfactual,
+      args_burnin = args_burnin
+    )
+    sims_half <- simulate_scenario(
+      x = mspop_half,
+      nsim = nsim,
+      init = inits, 
+      args = args_observed,
+      args2 = args_counterfactual,
+      args_burnin = args_burnin
     )
     
-    # and save output
-    future_name <- paste(
-      future_sub$future[j],
-      future_sub$future_next[j],
-      future_sub$scenario[j],
-      future_sub$scenario_next[j],
-      sep = "_"
-    )
-    qsave(
-      sims_future, 
-      file = paste0(
-        "outputs/simulations/future-", wb_list[i], "-", future_name, ".qs"
+    # save outputs
+    qsave(sims, file = paste0("outputs/simulations/sims-", wb_list[i], ".qs"))
+    qsave(sims_double, file = paste0("outputs/simulations/sensitivity-double-sims-", wb_list[i], ".qs"))
+    qsave(sims_half, file = paste0("outputs/simulations/sensitivity-half-sims-", wb_list[i], ".qs"))
+    
+    # extract initial conditions for forecasts from sims_observed
+    #  but use the no-interactions scenario because interactions
+    #  has n = 0 for many cases
+    init_future <- lapply(sims[[2]], \(x) x[, , dim(x)[3]])
+    
+    # simulate futures
+    future_sub <- metrics_future |>
+      filter(waterbody == wb_list[i]) |>
+      distinct(future, future_next, scenario, scenario_next)
+    
+    # run through each future and generate forecasts
+    for (j in seq_len(nrow(future_sub))) {
+      
+      # pull out metrics for a given scenario and calculate arguments
+      metrics_future_sub <- metrics_future |>
+        filter(
+          future == future_sub$future[j],
+          future_next == future_sub$future_next[j],
+          scenario == future_sub$scenario[j],
+          scenario_next == future_sub$scenario_next[j]
+        )
+      args_future <- prepare_args(
+        metrics = metrics_future_sub,
+        waterbody = wb_list[i],
+        pops = pop_list
       )
-    )
+      
+      # simulate under the specific scenario
+      sims_future <- simulate_scenario(
+        x = mspop,
+        nsim = nsim,
+        init = init_future, 
+        args = args_future,
+        args2 = NULL,
+        args_burnin = NULL
+      )
+      
+      # and save output
+      future_name <- paste(
+        future_sub$future[j],
+        future_sub$future_next[j],
+        future_sub$scenario[j],
+        future_sub$scenario_next[j],
+        sep = "_"
+      )
+      qsave(
+        sims_future, 
+        file = paste0(
+          "outputs/simulations/future-", wb_list[i], "-", future_name, ".qs"
+        )
+      )
+      
+    }
     
-  }
+  } 
   
 }
 
@@ -614,14 +620,30 @@ cpue_rb <- estimate_cpue(
 )                       
 
 # posterior checks (saved to figures)
-pp_mc <- pp_check(cpue_mc) + scale_x_log10() + xlab("Catch (total)") + ylab("Density") + theme(legend.position = "none")
-pp_bf <- pp_check(cpue_bf) + scale_x_log10() + xlab("Catch (total)") + ylab("Density") + theme(legend.position = "none")
-pp_mc_adult <- pp_check(cpue_adult_mc) + scale_x_log10() + xlab("Catch (adults)") + ylab("Density") + theme(legend.position = "none")
-pp_mc_recruit <- pp_check(cpue_recruit_mc) + scale_x_log10() + xlab("Catch (young of year)") + ylab("Density") + theme(legend.position = "none")
-pp_bf_recruit <- pp_check(cpue_recruit_bf) + scale_x_log10() + xlab("Catch (young of year)") + ylab("Density") + theme(legend.position = "none")
-pp_cc <- pp_check(cpue_cc) + scale_x_log10() + xlab("Catch (total)") + ylab("Density") + theme(legend.position = "none")
-pp_cc_recruit <- pp_check(cpue_recruit_cc) + scale_x_log10() + xlab("Catch (young of year)") + ylab("Density") + theme(legend.position = "none")
-pp_rb <- pp_check(cpue_rb) + scale_x_log10() + xlab("Catch (total)") + ylab("Density") + theme(legend.position = "none")
+pp_mc <- pp_check(cpue_mc) + scale_x_log10() + 
+  xlab("Catch (total)") + ylab("Density") + 
+  theme(legend.position = "none")
+pp_bf <- pp_check(cpue_bf) + scale_x_log10() + 
+  xlab("Catch (total)") + ylab("Density") +
+  theme(legend.position = "none")
+pp_mc_adult <- pp_check(cpue_adult_mc) + scale_x_log10() +
+  xlab("Catch (adults)") + ylab("Density") +
+  theme(legend.position = "none")
+pp_mc_recruit <- pp_check(cpue_recruit_mc) + scale_x_log10() +
+  xlab("Catch (young of year)") + ylab("Density") +
+  theme(legend.position = "none")
+pp_bf_recruit <- pp_check(cpue_recruit_bf) + scale_x_log10() +
+  xlab("Catch (young of year)") + ylab("Density") +
+  theme(legend.position = "none")
+pp_cc <- pp_check(cpue_cc) + scale_x_log10() + 
+  xlab("Catch (total)") + ylab("Density") + 
+  theme(legend.position = "none")
+pp_cc_recruit <- pp_check(cpue_recruit_cc) + scale_x_log10() +
+  xlab("Catch (young of year)") + ylab("Density") + 
+  theme(legend.position = "none")
+pp_rb <- pp_check(cpue_rb) + scale_x_log10() + 
+  xlab("Catch (total)") + ylab("Density") +
+  theme(legend.position = "none")
 pp_all <- (pp_mc | pp_mc_recruit) /
   (pp_mc_adult | pp_bf) /
   (pp_bf_recruit | pp_rb) +
@@ -641,55 +663,63 @@ ggsave(
 # validation on main sims files (sims_main[[i]][[1]])
 names(sims_main) <- gsub("sims-|\\.qs", "", sim_files)
 mc_sim_metrics <- calculate_val_metrics(
-  x = lapply(sims_main[northern_rivers], \(x) x[[1]][[1]]),
+  x = sims_main[northern_rivers],
   cpue_mod = cpue_mc,
   subset = 1:50, 
-  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year)
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 1
 )
 mc_sim_metrics_adult <- calculate_val_metrics(
-  x = lapply(sims_main[northern_rivers], \(x) x[[1]][[1]]),
+  x = sims_main[northern_rivers],
   cpue_mod = cpue_adult_mc,
   subset = 5:50, 
-  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year)
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 1
 )
 mc_sim_metrics_recruit <- calculate_val_metrics(
-  x = lapply(sims_main[northern_rivers], \(x) x[[1]][[1]]),
+  x = sims_main[northern_rivers],
   cpue_mod = cpue_recruit_mc,
   recruit = TRUE,
   subset = 1, 
-  sim_years = (min(metrics_observed$water_year) - 1L):max(metrics_observed$water_year)
+  sim_years = (min(metrics_observed$water_year) - 1L):max(metrics_observed$water_year),
+  sp_idx = 1
 )
 bf_sim_metrics <- calculate_val_metrics(
-  x = lapply(sims_main[!names(sims_main) %in% northern_rivers], \(x) x[[1]][[1]]),
+  x = sims_main[!names(sims_main) %in% northern_rivers],
   cpue = cpue_bf,
   subset = 1:11, 
-  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year)
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 1
 )
 bf_sim_metrics_recruit <- calculate_val_metrics(
-  x = lapply(sims_main[!names(sims_main) %in% northern_rivers], \(x) x[[1]][[1]]),
+  x = sims_main[!names(sims_main) %in% northern_rivers],
   cpue_mod = cpue_recruit_bf,
   recruit = TRUE,
   subset = 1, 
-  sim_years = (min(metrics_observed$water_year) - 1L):max(metrics_observed$water_year)
+  sim_years = (min(metrics_observed$water_year) - 1L):max(metrics_observed$water_year),
+  sp_idx = 1
 )
 cc_sim_metrics <- calculate_val_metrics(
-  x = lapply(sims_main, \(x) x[[1]][[2]]),
+  x = sims_main,
   cpue = cpue_cc,
-  subset = 1:11, 
-  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year)
+  subset = 1:28,
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 2
 )
 cc_sim_metrics_recruit <- calculate_val_metrics(
-  x = lapply(sims_main, \(x) x[[1]][[2]]),
+  x = sims_main,
   cpue_mod = cpue_recruit_cc,
   recruit = TRUE,
   subset = 1, 
-  sim_years = (min(metrics_observed$water_year) - 1L):max(metrics_observed$water_year)
+  sim_years = (min(metrics_observed$water_year) - 1L):max(metrics_observed$water_year),
+  sp_idx = 2
 )
 rb_sim_metrics <- calculate_val_metrics(
-  x = lapply(sims_main[northern_rivers], \(x) x[[1]][[3]]),
+  x = sims_main[northern_rivers],
   cpue = cpue_rb,
   subset = 1:7, 
-  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year)
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 3
 )
 sim_metrics <- bind_rows(
   mc_sim_metrics |> mutate(species = "Murray Cod"),
@@ -704,19 +734,17 @@ metrics_plot_bf <- plot_metric(
     bf_sim_metrics_recruit |> mutate(species = "River Blackfish (young of year)")
   )
 )
-
-# TODO: Fix up carp recriut metrics calc and this plot (check plot_metric for filtering)
 metrics_plot_cc <- plot_metric(
   bind_rows(
-    cc_sim_metrics |> mutate(species = "Common Carp")#,
-    # cc_sim_metrics_recruit |> mutate(species = "Common Carp (young of year)")
+    cc_sim_metrics |> mutate(species = "Common Carp"),
+    cc_sim_metrics_recruit |> mutate(species = "Common Carp (young of year)")
   )
 )
 ggsave(
   filename = "outputs/figures/metrics-mc.png",
   plot = metrics_plot_mc,
   device = ragg::agg_png,
-  width = 7,
+  width = 8,
   height = 6,
   units = "in",
   dpi = 600
@@ -725,7 +753,7 @@ ggsave(
   filename = "outputs/figures/metrics-bf.png",
   plot = metrics_plot_bf,
   device = ragg::agg_png,
-  width = 7,
+  width = 8,
   height = 6,
   units = "in",
   dpi = 600
@@ -739,11 +767,646 @@ ggsave(
   units = "in",
   dpi = 600
 )
+ggsave(
+  filename = "outputs/figures/metrics-cc.png",
+  plot = metrics_plot_cc,
+  device = ragg::agg_png,
+  width = 10,
+  height = 6,
+  units = "in",
+  dpi = 600
+)
+
+# plot hindcasts for observed with and without interactions
+mc_hindcasts <- plot_hindcasts(
+  x = sims_main[northern_rivers],
+  cpue = cpue_mc,
+  subset = 1:50, 
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 1
+) 
+mc_adult_hindcasts <- plot_hindcasts(
+  x = sims_main[northern_rivers],
+  cpue = cpue_adult_mc,
+  subset = 5:50, 
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 1
+) 
+mc_recruit_hindcasts <- plot_hindcasts(
+  x = sims_main[northern_rivers],
+  cpue = cpue_recruit_mc,
+  recruit = TRUE,
+  subset = 1, 
+  sim_years = (min(metrics_observed$water_year) - 1L):max(metrics_observed$water_year),
+  sp_idx = 1
+) 
+bf_hindcasts <- plot_hindcasts(
+  x = sims_main[!names(sims_main) %in% northern_rivers],
+  cpue = cpue_bf,
+  subset = 1:11, 
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 1
+) 
+bf_recruit_hindcasts <- plot_hindcasts(
+  x = sims_main[!names(sims_main) %in% northern_rivers],
+  cpue = cpue_recruit_bf,
+  recruit = TRUE,
+  subset = 1, 
+  sim_years = (min(metrics_observed$water_year) - 1L):max(metrics_observed$water_year),
+  sp_idx = 1
+) 
+rb_hindcasts <- plot_hindcasts(
+  x = sims_main[northern_rivers],
+  cpue = cpue_rb,
+  subset = 1:7, 
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 3
+) 
+cc_hindcasts <- plot_hindcasts(
+  x = sims_main,
+  cpue = cpue_cc,
+  subset = 1:28, 
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 2
+) 
+cc_recruit_hindcasts <- plot_hindcasts(
+  x = sims_main,
+  cpue = cpue_recruit_cc,
+  recruit = TRUE,
+  subset = 1, 
+  sim_years = (min(metrics_observed$water_year) - 1L):max(metrics_observed$water_year),
+  sp_idx = 2
+) 
+
+# save the plots
+ggsave(
+  filename = "outputs/figures/hindcasts-mc.png",
+  plot = mc_hindcasts,
+  device = ragg::agg_png,
+  width = 7,
+  height = 6,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/hindcasts-mc-adult.png",
+  plot = mc_adult_hindcasts,
+  device = ragg::agg_png,
+  width = 7,
+  height = 6,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/hindcasts-mc-recruit.png",
+  plot = mc_recruit_hindcasts,
+  device = ragg::agg_png,
+  width = 7,
+  height = 6,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/hindcasts-bf.png",
+  plot = bf_hindcasts,
+  device = ragg::agg_png,
+  width = 8,
+  height = 7,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/hindcasts-bf-recruit.png",
+  plot = bf_recruit_hindcasts,
+  device = ragg::agg_png,
+  width = 8,
+  height = 7,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/hindcasts-cc.png",
+  plot = cc_hindcasts,
+  device = ragg::agg_png,
+  width = 10,
+  height = 8,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/hindcasts-cc-recruit.png",
+  plot = cc_recruit_hindcasts,
+  device = ragg::agg_png,
+  width = 10,
+  height = 8,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/hindcasts-rb.png",
+  plot = rb_hindcasts,
+  device = ragg::agg_png,
+  width = 7,
+  height = 6,
+  units = "in",
+  dpi = 600
+)
 
 # compare the four scenarios (obs, obs-noint, cf, cf-noint)
-# sims_main[[i]][1:4]
+trajectories_mc_adult <- plot_trajectories(
+  x = sims_main[northern_rivers], 
+  subset = 5:50,
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 1
+)
+trajectories_mc <- plot_trajectories(
+  x = sims_main[northern_rivers], 
+  subset = 1:50,
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 1
+)
+trajectories_mc_recruit <- plot_trajectories(
+  x = sims_main[northern_rivers], 
+  subset = 1,
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 1
+)
+trajectories_bf <- plot_trajectories(
+  x = sims_main[!names(sims_main) %in% northern_rivers], 
+  subset = 1:11,
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 1
+)
+trajectories_bf_recruit <- plot_trajectories(
+  x = sims_main[!names(sims_main) %in% northern_rivers], 
+  subset = 1,
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 1
+)
+trajectories_cc <- plot_trajectories(
+  x = sims_main, 
+  subset = 1:28,
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 2
+)
+trajectories_cc_recruit <- plot_trajectories(
+  x = sims_main, 
+  subset = 1,
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 2
+)
+trajectories_rb <- plot_trajectories(
+  x = sims_main[northern_rivers[1:5]], 
+  subset = 1:7,
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 3
+)
+
+# save the plots
+ggsave(
+  filename = "outputs/figures/trajectories-mc.png",
+  plot = trajectories_mc,
+  device = ragg::agg_png,
+  width = 8,
+  height = 6,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/trajectories-mc-adult.png",
+  plot = trajectories_mc_adult,
+  device = ragg::agg_png,
+  width = 8,
+  height = 6,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/trajectories-mc-recruit.png",
+  plot = trajectories_mc_recruit,
+  device = ragg::agg_png,
+  width = 8,
+  height = 6,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/trajectories-bf.png",
+  plot = trajectories_bf,
+  device = ragg::agg_png,
+  width = 8,
+  height = 7,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/trajectories-bf-recruit.png",
+  plot = trajectories_bf_recruit,
+  device = ragg::agg_png,
+  width = 8,
+  height = 7,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/trajectories-cc.png",
+  plot = trajectories_cc,
+  device = ragg::agg_png,
+  width = 10,
+  height = 8,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/trajectories-cc-recruit.png",
+  plot = trajectories_cc_recruit,
+  device = ragg::agg_png,
+  width = 10,
+  height = 8,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/trajectories-rb.png",
+  plot = trajectories_rb,
+  device = ragg::agg_png,
+  width = 8,
+  height = 6,
+  units = "in",
+  dpi = 600
+)
 
 # check sensitivity to interaction strength
+sims_sens_files <- dir("outputs/simulations/")
+sims_sens_files <- sims_sens_files[!grepl("future-", sims_sens_files)]
+sims_sens <- lapply(sims_sens_files, \(x) qread(paste0("outputs/simulations/", x)))
+names(sims_sens) <- gsub(
+  "sims-", "", 
+  gsub(
+    "-sims-", "_",
+    gsub(
+      "sensitivity-|\\.qs", "", sims_sens_files
+    )
+  )
+)
+sens_double <- lapply(sims_sens[grepl("double_", names(sims_sens))], \(x) x[c(1, 3)])
+sens_half <- lapply(sims_sens[grepl("half_", names(sims_sens))], \(x) x[c(1, 3)])
+sens_main <- lapply(
+  sims_sens[!(grepl("half_", names(sims_sens)) | grepl("double_", names(sims_sens)))],
+  \(x) x[c(1, 3)]
+)
+sens_combined <- mapply(
+  \(x, y, z) c(x, y, z),
+  x = sens_main,
+  y = sens_double,
+  z = sens_half, 
+  SIMPLIFY = FALSE
+)
 
-# plot futures
+# plot trajectories under different interaction strengths
+sensitivity_mc <- plot_trajectories(
+  x = sens_combined[northern_rivers], 
+  subset = 1:50,
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 1,
+  scn = 1:6,
+  .names = paste0(
+    rep(c("Baseline", "Double", "Half"), each = 2), 
+    rep(c(" (with e-water)", " (without e-water)"), times = 3)
+  )
+)
+sensitivity_mc_adult <- plot_trajectories(
+  x = sens_combined[northern_rivers], 
+  subset = 5:50,
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 1,
+  scn = 1:6,
+  .names = paste0(
+    rep(c("Baseline", "Double", "Half"), each = 2), 
+    rep(c(" (with e-water)", " (without e-water)"), times = 3)
+  )
+)
+sensitivity_mc_recruit <- plot_trajectories(
+  x = sens_combined[northern_rivers], 
+  subset = 1,
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 1,
+  scn = 1:6,
+  .names = paste0(
+    rep(c("Baseline", "Double", "Half"), each = 2), 
+    rep(c(" (with e-water)", " (without e-water)"), times = 3)
+  )
+)
+sensitivity_bf <- plot_trajectories(
+  x = sens_combined[!names(sens_combined) %in% northern_rivers], 
+  subset = 1:11,
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 1,
+  scn = 1:6,
+  .names = paste0(
+    rep(c("Baseline", "Double", "Half"), each = 2), 
+    rep(c(" (with e-water)", " (without e-water)"), times = 3)
+  )
+)
+sensitivity_bf_recruit <- plot_trajectories(
+  x = sens_combined[!names(sens_combined) %in% northern_rivers], 
+  subset = 1,
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 1,
+  scn = 1:6,
+  .names = paste0(
+    rep(c("Baseline", "Double", "Half"), each = 2), 
+    rep(c(" (with e-water)", " (without e-water)"), times = 3)
+  )
+)
+sensitivity_cc <- plot_trajectories(
+  x = sens_combined, 
+  subset = 1:28,
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 2,
+  scn = 1:6,
+  .names = paste0(
+    rep(c("Baseline", "Double", "Half"), each = 2), 
+    rep(c(" (with e-water)", " (without e-water)"), times = 3)
+  )
+)
+sensitivity_cc_recruit <- plot_trajectories(
+  x = sens_combined, 
+  subset = 1,
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 2,
+  scn = 1:6,
+  .names = paste0(
+    rep(c("Baseline", "Double", "Half"), each = 2), 
+    rep(c(" (with e-water)", " (without e-water)"), times = 3)
+  )
+)
+sensitivity_rb <- plot_trajectories(
+  x = sens_combined[northern_rivers[1:5]], 
+  subset = 1:7,
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  sp_idx = 3,
+  scn = 1:6,
+  .names = paste0(
+    rep(c("Baseline", "Double", "Half"), each = 2), 
+    rep(c(" (with e-water)", " (without e-water)"), times = 3)
+  )
+)
 
+# save the plots
+ggsave(
+  filename = "outputs/figures/sensitivity-mc.png",
+  plot = sensitivity_mc,
+  device = ragg::agg_png,
+  width = 7,
+  height = 6,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/sensitivity-mc-adult.png",
+  plot = sensitivity_mc_adult,
+  device = ragg::agg_png,
+  width = 7,
+  height = 6,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/sensitivity-mc-recruit.png",
+  plot = sensitivity_mc_recruit,
+  device = ragg::agg_png,
+  width = 7,
+  height = 6,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/sensitivity-bf.png",
+  plot = sensitivity_bf,
+  device = ragg::agg_png,
+  width = 8,
+  height = 7,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/sensitivity-bf-recruit.png",
+  plot = sensitivity_bf_recruit,
+  device = ragg::agg_png,
+  width = 8,
+  height = 7,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/sensitivity-cc.png",
+  plot = sensitivity_cc,
+  device = ragg::agg_png,
+  width = 10,
+  height = 8,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/sensitivity-cc-recruit.png",
+  plot = sensitivity_cc_recruit,
+  device = ragg::agg_png,
+  width = 10,
+  height = 8,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/sensitivity-rb.png",
+  plot = sensitivity_rb,
+  device = ragg::agg_png,
+  width = 7,
+  height = 6,
+  units = "in",
+  dpi = 600
+)
+
+# load futures
+sims_future_files <- dir("outputs/simulations/")
+sims_future_files <- sims_future_files[grepl("future-", sims_future_files)]
+sims_future <- lapply(sims_future_files, \(x) qread(paste0("outputs/simulations/", x)))
+names(sims_future) <- gsub("future-|\\.qs", "", sims_future_files)
+
+# pull out names of each waterbody for matching systems/species
+future_waterbody <- sapply(
+  names(sims_future),
+  \(x) strsplit(x, "-")[[1]][1]
+)
+
+# plot the forecasts for all systems for 2024
+mc_forecasts <- summarise_forecasts(  
+  x = sims_future[future_waterbody %in% northern_rivers], 
+  subset = 1:50,
+  sp_idx = 1,
+  probs = c(0.1, 0.9),
+  scn = 1:2,
+  .names = c("With interactions", "Without interactions")
+)
+mc_forecasts_recruits <- summarise_forecasts(  
+  x = sims_future[future_waterbody %in% northern_rivers], 
+  subset = 1,
+  sp_idx = 1,
+  probs = c(0.1, 0.9),
+  scn = 1:2,
+  .names = c("With interactions", "Without interactions")
+)
+mc_forecasts_adults <- summarise_forecasts(  
+  x = sims_future[future_waterbody %in% northern_rivers], 
+  subset = 5:50,
+  sp_idx = 1,
+  probs = c(0.1, 0.9),
+  scn = 1:2,
+  .names = c("With interactions", "Without interactions")
+)
+bf_forecasts <- summarise_forecasts(  
+  x = sims_future[!future_waterbody %in% northern_rivers], 
+  subset = 1:11,
+  sp_idx = 1,
+  probs = c(0.1, 0.9),
+  scn = 1:2,
+  .names = c("With interactions", "Without interactions")
+)
+bf_forecasts_recruits <- summarise_forecasts(  
+  x = sims_future[!future_waterbody %in% northern_rivers], 
+  subset = 1,
+  sp_idx = 1,
+  probs = c(0.1, 0.9),
+  scn = 1:2,
+  .names = c("With interactions", "Without interactions")
+)
+cc_forecasts <- summarise_forecasts(  
+  x = sims_future, 
+  subset = 1:28,
+  sp_idx = 2,
+  probs = c(0.1, 0.9),
+  scn = 1:2,
+  .names = c("With interactions", "Without interactions")
+)
+cc_forecasts_recruits <- summarise_forecasts(  
+  x = sims_future, 
+  subset = 1,
+  sp_idx = 2,
+  probs = c(0.1, 0.9),
+  scn = 1:2,
+  .names = c("With interactions", "Without interactions")
+)
+rb_forecasts <- summarise_forecasts(  
+  x = sims_future[future_waterbody %in% northern_rivers], 
+  subset = 1:7,
+  sp_idx = 3,
+  probs = c(0.1, 0.9),
+  scn = 1:2,
+  .names = c("With interactions", "Without interactions")
+)
+mc_forecasts_plot <- plot_forecasts(
+  x = mc_forecasts, 
+  target = 2024
+)
+mc_forecasts_recruit_plot <- plot_forecasts(
+  x = mc_forecasts, 
+  target = 2024
+)
+mc_forecasts_adult_plot <- plot_forecasts(
+  x = mc_forecasts_adults, 
+  target = 2024
+)
+bf_forecasts_plot <- plot_forecasts(
+  x = bf_forecasts, 
+  target = 2024
+)
+bf_forecasts_recruit_plot <- plot_forecasts(
+  x = bf_forecasts_recruits, 
+  target = 2024
+)
+cc_forecasts_plot <- plot_forecasts(
+  x = cc_forecasts, 
+  target = 2024
+)
+cc_forecasts_recruit_plot <- plot_forecasts(
+  x = cc_forecasts_recruits, 
+  target = 2024
+)
+rb_forecasts_plot <- plot_forecasts(
+  x = rb_forecasts, 
+  target = 2024
+)
+
+# save plots
+ggsave(
+  filename = "outputs/figures/forecasts-mc.png",
+  plot = mc_forecasts_plot,
+  device = ragg::agg_png,
+  width = 8,
+  height = 6,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/forecasts-mc-recruit.png",
+  plot = mc_forecasts_recruit_plot,
+  device = ragg::agg_png,
+  width = 8,
+  height = 6,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/forecasts-mc-adult.png",
+  plot = mc_forecasts_adult_plot,
+  device = ragg::agg_png,
+  width = 8,
+  height = 6,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/forecasts-bf.png",
+  plot = bf_forecasts_plot,
+  device = ragg::agg_png,
+  width = 8,
+  height = 6,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/forecasts-bf-recruit.png",
+  plot = bf_forecasts_recruit_plot,
+  device = ragg::agg_png,
+  width = 8,
+  height = 6,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/forecasts-cc.png",
+  plot = cc_forecasts_plot,
+  device = ragg::agg_png,
+  width = 10,
+  height = 7,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/forecasts-cc-recruit.png",
+  plot = cc_forecasts_recruit_plot,
+  device = ragg::agg_png,
+  width = 10,
+  height = 7,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/forecasts-rb.png",
+  plot = rb_forecasts_plot,
+  device = ragg::agg_png,
+  width = 8,
+  height = 6,
+  units = "in",
+  dpi = 600
+)
