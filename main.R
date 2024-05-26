@@ -41,7 +41,7 @@ source("R/validation.R")
 
 # settings
 set.seed(2024-05-01)
-nsim <- 100
+nsim <- 1000
 nburnin <- 10
 simulate_again <- TRUE
 
@@ -473,9 +473,8 @@ if (simulate_again | !sims_exist) {
     qsave(sims_half, file = paste0("outputs/simulations/sensitivity-half-sims-", wb_list[i], ".qs"))
     
     # extract initial conditions for forecasts from sims_observed
-    #  but use the no-interactions scenario because interactions
-    #  has n = 0 for many cases
-    init_future <- lapply(sims[[2]], \(x) x[, , dim(x)[3]])
+    #   (setting all futures to the same observed + interactions state)
+    init_future <- lapply(sims[[1]], \(x) x[, , dim(x)[3]])
     
     # simulate futures
     future_sub <- metrics_future |>

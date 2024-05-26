@@ -347,7 +347,7 @@ specify_interactions <- function(pops, scale = 1, ...) {
     
     # specify age classes for each size class
     small_fish <- 1
-    medium_fish <- 2
+    medium_fish <- 1:2
     large_bf <- 3:11 
     large_carp <- 3:28
     kbf <- scale * 10000
